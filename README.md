@@ -1,4 +1,4 @@
-# Foakh Booking & Sales CRM
+# Foakh Booking & Sales CRM.
 
 A consultation booking journey and an internal sales CRM for **Foakh Wind Corridor
 Enclave** — a 12-storey residential development in DHA City, Karachi, comprising the
