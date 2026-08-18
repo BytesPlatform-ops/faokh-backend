@@ -18,7 +18,7 @@ import {
 } from '@/components/ui';
 import { formatDate, formatPkr } from '@/lib/format';
 import type { CommissionSummaryRow, SessionUser } from '@/services/crm';
-import { commissionsService, isBroker, sessionService } from '@/services/crm';
+import { commissionsService, isSalesAgent, sessionService } from '@/services/crm';
 
 /**
  * Broker commission: 4% of the sale, released as four 1% milestones.
@@ -36,7 +36,7 @@ export default function CommissionsPage() {
     try {
       const session = await sessionService.current();
       setUser(session);
-      setRows(await commissionsService.summary(isBroker(session) ? session.broker?.id : undefined));
+      setRows(await commissionsService.summary(isSalesAgent(session) ? session.salesAgent?.id : undefined));
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load commissions.');
@@ -62,8 +62,8 @@ export default function CommissionsPage() {
       <PageHeader
         title="Commissions"
         subtitle={
-          user?.broker !== undefined
-            ? `${user.broker.brokerCode} · ${user.broker.commissionRatePct}% of each sale, in four 1% milestones`
+          user?.salesAgent !== undefined
+            ? `${user.salesAgent.salesAgentCode} · broker referral commission, 4% in four 1% milestones`
             : 'All brokers'
         }
       />

@@ -4,12 +4,12 @@ import { useState } from 'react';
 
 import { Badge } from '@/components/ui';
 import { formatArea, formatCnic, formatPkr, formatRate } from '@/lib/format';
-import type { Broker, ClassCode, Client, Unit } from '@/services/crm';
+import type { SalesAgent, ClassCode, Client, Unit } from '@/services/crm';
 import { inventoryService } from '@/services/crm';
 
 export interface BookingSummaryData {
   client: Client | null;
-  broker: Broker | undefined;
+  salesAgent: SalesAgent | undefined;
   unit: Unit | null;
   classCode: ClassCode | null;
   totalPaisa: number | null;
@@ -127,15 +127,17 @@ function buildRows(data: BookingSummaryData): { label: string; value: React.Reac
       ),
   });
 
+  // The internal employee handling the sale — not the referring broker, which
+  // is a separate party and shown on its own row when there is one.
   rows.push({
-    label: 'Broker',
+    label: 'Handled by',
     value:
-      data.broker === undefined ? (
+      data.salesAgent === undefined ? (
         <span className="text-[var(--foakh-muted)]">—</span>
       ) : (
         <>
-          <span className="block font-mono text-xs">{data.broker.brokerCode}</span>
-          <span className="text-xs text-[var(--foakh-muted)]">{data.broker.name}</span>
+          <span className="block font-mono text-xs">{data.salesAgent.salesAgentCode}</span>
+          <span className="text-xs text-[var(--foakh-muted)]">{data.salesAgent.name}</span>
         </>
       ),
   });

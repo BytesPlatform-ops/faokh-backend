@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { LeadSource } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { IsDate, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsDate,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreateBookingDto {
   @ApiProperty({ format: 'uuid' })
@@ -10,6 +21,25 @@ export class CreateBookingDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID('4')
   unitId!: string;
+
+  /**
+   * How the client reached Foakh, and the broker who introduced them.
+   *
+   * Carried on the booking because the wizard establishes the source *after*
+   * the client has been created — a client is often created before anyone has
+   * asked where they came from. Supplying it here records it on the booking and
+   * back-fills the client, so the referral cannot be silently lost between the
+   * two steps. Omit both for a direct sale.
+   */
+  @ApiPropertyOptional({ enum: LeadSource })
+  @IsOptional()
+  @IsEnum(LeadSource)
+  leadSource?: LeadSource;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'The referring external broker.' })
+  @IsOptional()
+  @IsUUID('4')
+  brokerId?: string;
 
   @ApiProperty({
     example: 'ELEGANT',

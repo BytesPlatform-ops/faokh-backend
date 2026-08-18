@@ -31,6 +31,7 @@ const NAV = [
   { href: '/dashboard', label: 'Dashboard', short: 'Home', icon: '◈' },
   { href: '/inventory', label: 'Inventory', short: 'Units', icon: '▤' },
   { href: '/clients', label: 'Clients', short: 'Clients', icon: '◉' },
+  { href: '/brokers', label: 'Brokers', short: 'Brokers', icon: '⇄' },
   { href: '/bookings', label: 'Bookings', short: 'Bookings', icon: '❑' },
   { href: '/commissions', label: 'Commissions', short: 'Earnings', icon: '％' },
 ] as const;
@@ -138,7 +139,7 @@ export function CrmShell({ children }: { children: React.ReactNode }) {
             <>
               <p className="text-sm font-medium text-[var(--foakh-ink)]">{user.name}</p>
               <p className="mt-0.5 font-mono text-[0.65rem] text-[var(--foakh-muted)]">
-                {user.broker?.brokerCode ?? user.roles[0]}
+                {user.salesAgent?.salesAgentCode ?? user.roles[0]}
               </p>
             </>
           )}
@@ -206,7 +207,7 @@ export function CrmShell({ children }: { children: React.ReactNode }) {
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--foakh-border)] bg-white/95 backdrop-blur-sm lg:hidden"
       >
-        <ul className="grid grid-cols-5">
+        <ul className="grid grid-cols-6">
           {NAV.map((item) => (
             <li key={item.href}>
               <Link

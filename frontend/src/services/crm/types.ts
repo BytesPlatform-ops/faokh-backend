@@ -44,7 +44,7 @@ export type CommissionStatus =
   | 'HELD'
   | 'CANCELLED';
 export type FurnishingLevel = 'UNFURNISHED' | 'FURNISHED' | 'FURNISHED_SERVICED';
-export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FINANCE' | 'BROKER';
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FINANCE' | 'SALES_AGENT';
 
 // ------------------------------------------------------------- product master
 
@@ -164,6 +164,18 @@ export interface Client {
   nomineeCnic?: string;
   notes?: string;
 
+  /** The internal Foakh employee who owns this record. */
+  salesAgentId: string;
+  salesAgentCode: string;
+  salesAgentName: string;
+
+  /** How the client reached Foakh. */
+  leadSource: LeadSource;
+
+  /**
+   * The external partner who introduced them. Empty on a direct client, which
+   * is the ordinary case — not a missing value.
+   */
   brokerId: string;
   brokerCode: string;
   brokerName: string;
@@ -194,27 +206,117 @@ export type CreateClientInput = Omit<
   Client,
   | 'id'
   | 'clientCode'
+  // Server-assigned: the Sales Agent comes from the session, and the broker's
+  // display fields are derived from whichever broker id is supplied.
+  | 'salesAgentId'
+  | 'salesAgentCode'
+  | 'salesAgentName'
   | 'brokerId'
   | 'brokerCode'
   | 'brokerName'
+  | 'leadSource'
   | 'bookingStatus'
   | 'lastActivityAt'
   | 'createdAt'
   | 'documents'
-> & { documents?: File[] };
+> & {
+  documents?: File[];
+  /** Defaults to DIRECT. Required to be BROKER when a broker is attached. */
+  leadSource?: LeadSource;
+  /** The external partner who introduced them, when there was one. */
+  brokerId?: string;
+};
 
-// ------------------------------------------------------------------- brokers
+// ----------------------------------------------------------- lead source
 
-export interface Broker {
+export type LeadSource =
+  | 'DIRECT'
+  | 'BROKER'
+  | 'WEBSITE'
+  | 'PHONE'
+  | 'WHATSAPP'
+  | 'REFERRAL'
+  | 'OTHER';
+
+export const LEAD_SOURCES: { value: LeadSource; label: string; hint?: string }[] = [
+  { value: 'DIRECT', label: 'Direct / walk-in' },
+  { value: 'BROKER', label: 'External broker', hint: 'Introduced by a channel partner' },
+  { value: 'WEBSITE', label: 'Website' },
+  { value: 'PHONE', label: 'Phone' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'REFERRAL', label: 'Referral' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+// ------------------------------------------------------------- sales agents
+
+/**
+ * An internal Foakh sales employee — the authenticated user.
+ *
+ * Not a broker. This person sells on Foakh's behalf and is salaried; they are
+ * never paid the 4% referral commission, which belongs to an external partner.
+ */
+export interface SalesAgent {
   id: string;
-  /** BRK-2026-000001 — immutable, and the only thing that attributes a sale. */
-  brokerCode: string;
+  /** SAG-2026-000001 */
+  salesAgentCode: string;
   name: string;
   email: string;
   mobile?: string;
-  companyName?: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+}
+
+// ------------------------------------------------------- external brokers
+
+/**
+ * An external referral / channel partner.
+ *
+ * Does not log in. A Sales Agent records one when a client was introduced by
+ * them, and only then does a 4% commission schedule come into existence.
+ */
+export interface Broker {
+  id: string;
+  /** BRK-2026-000001 */
+  brokerCode: string;
+  fullName: string;
+  agencyName?: string;
+  cnic?: string;
+  mobile: string;
+  whatsapp?: string;
+  email?: string;
+  addressLine?: string;
+  city?: string;
+  ntn?: string;
+  notes?: string;
   commissionRatePct: number;
-  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  status: 'ACTIVE' | 'INACTIVE';
+  isActive: boolean;
+
+  createdBySalesAgentCode?: string;
+  createdBySalesAgentName?: string;
+  createdAt: string;
+  updatedAt: string;
+
+  referredClientCount: number;
+  referredBookingCount: number;
+  salesValuePaisa: number;
+  commissionTotalPaisa: number;
+  commissionPaidPaisa: number;
+  commissionOutstandingPaisa: number;
+}
+
+/** Only a name and a mobile are required — an agent is often reading a card. */
+export interface CreateBrokerInput {
+  fullName: string;
+  mobile: string;
+  agencyName?: string;
+  cnic?: string;
+  whatsapp?: string;
+  email?: string;
+  addressLine?: string;
+  city?: string;
+  ntn?: string;
+  notes?: string;
 }
 
 export interface SessionUser {
@@ -222,8 +324,8 @@ export interface SessionUser {
   name: string;
   email: string;
   roles: UserRole[];
-  /** Present only for brokers. */
-  broker?: Broker;
+  /** Present only for Sales Agents — the internal Foakh employee. */
+  salesAgent?: SalesAgent;
 }
 
 // ------------------------------------------------------------------ bookings
@@ -289,9 +391,20 @@ export interface Booking {
   clientCnic: string;
   clientMobile: string;
 
-  brokerId: string;
-  brokerCode: string;
-  brokerName: string;
+  /**
+   * Three distinct parties. The Sales Agent sold it for Foakh; the broker, when
+   * present, introduced the buyer and is the only one earning the 4%.
+   */
+  salesAgentId: string;
+  salesAgentCode: string;
+  salesAgentName: string;
+
+  leadSource: LeadSource;
+
+  /** Null on a direct sale — and null is what means no commission exists. */
+  brokerId: string | null;
+  brokerCode: string | null;
+  brokerName: string | null;
 
   unitId: string;
   snapshot: BookingSnapshot;
@@ -313,6 +426,13 @@ export interface Booking {
 }
 
 export interface CreateBookingInput {
+  /**
+   * The source, established after the client was created. Sent with the booking
+   * so the referral cannot be lost between the two steps — the server writes it
+   * to both the booking and the client.
+   */
+  leadSource?: LeadSource;
+  brokerId?: string;
   clientId: string;
   unitId: string;
   classCode: ClassCode;

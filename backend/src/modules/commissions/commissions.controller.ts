@@ -25,7 +25,9 @@ export class CommissionsController {
     const scope = visibilityScope(user);
 
     const plans = await this.prisma.commissionPlan.findMany({
-      where: scope === undefined ? {} : { brokerId: scope },
+      // Scoped through the booking: a Sales Agent sees the broker commissions
+      // arising from their own sales. They are staff and earn none of it.
+      where: scope === undefined ? {} : { booking: { salesAgentId: scope } },
       include: {
         milestones: { orderBy: { sequence: 'asc' } },
         booking: {

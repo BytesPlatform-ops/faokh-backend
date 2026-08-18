@@ -53,24 +53,20 @@ const PROVINCES = [
 export function ClientStep({
   selected,
   onSelect,
-  brokerId,
 }: {
   selected: Client | null;
   onSelect: (client: Client) => void;
-  brokerId: string | undefined;
 }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<Client[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const load = useCallback(async (term: string, scope: string | undefined) => {
+  const load = useCallback(async (term: string) => {
     try {
-      const result = await clientsService.list({
-        search: term,
-        pageSize: 8,
-        ...(scope !== undefined ? { brokerId: scope } : {}),
-      });
+      // No ownership filter is sent: the API scopes to the authenticated Sales
+      // Agent server-side, which is the only place it can be enforced.
+      const result = await clientsService.list({ search: term, pageSize: 8 });
       setResults(result.data);
       setError(null);
     } catch (caught) {
@@ -79,8 +75,8 @@ export function ClientStep({
   }, []);
 
   useEffect(() => {
-    void load(search, brokerId);
-  }, [search, brokerId, load]);
+    void load(search);
+  }, [search, load]);
 
   function handleCreated(client: Client) {
     // Select immediately and close — the broker must not have to find the
@@ -134,7 +130,7 @@ export function ClientStep({
       </div>
 
       {error !== null ? (
-        <ErrorState message={error} onRetry={() => void load(search, brokerId)} />
+        <ErrorState message={error} onRetry={() => void load(search)} />
       ) : results === null ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-16 w-full" />
@@ -392,6 +388,7 @@ function NewClientDrawer({
         nomineeCnic: form.nomineeCnic || undefined,
         notes: form.notes || undefined,
         documents: files,
+
       });
 
       setForm(EMPTY_FORM);

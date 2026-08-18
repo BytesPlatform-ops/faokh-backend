@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   BookingStatus,
+  LeadSource,
   CommissionMilestoneStatus,
   InstallmentStatus,
   Prisma,
@@ -19,6 +20,10 @@ import { PrismaService, type PrismaTransaction } from '../../database/prisma.ser
 export interface CreateBookingInput {
   clientId: string;
   unitId: string;
+
+  /** Supplied when the wizard established the source after creating the client. */
+  leadSource?: LeadSource;
+  brokerId?: string;
   /** The class being sold. May differ from the unit's currently-marked class. */
   classId: string;
   bookingDate: Date;
@@ -96,19 +101,33 @@ export class BookingsService {
         );
       }
 
-      // The referral broker is inherited from the client, because that is where
-      // the introduction was recorded. Null is the ordinary case — a direct
-      // sale — and it is precisely what stops a commission schedule existing.
-      const broker =
-        client.brokerId === null
-          ? null
-          : await tx.broker.findUnique({ where: { id: client.brokerId } });
+      // The referral comes from this request when supplied, and otherwise from
+      // the client. The wizard establishes the source after the client is
+      // created, so the request is the fresher answer — but a client that
+      // already carries a broker keeps it if this booking says nothing.
+      const brokerId = input.brokerId ?? client.brokerId;
+      const leadSource = input.leadSource ?? client.leadSource;
 
-      if (client.brokerId !== null && (broker === null || !broker.isActive)) {
+      const broker =
+        brokerId === null || brokerId === undefined
+          ? null
+          : await tx.broker.findUnique({ where: { id: brokerId } });
+
+      if (brokerId != null && (broker === null || !broker.isActive)) {
         throw AppException.unprocessable(
           ErrorCode.BROKER_NOT_ACTIVE,
-          'The referring broker on this client is not active.',
+          'The referring broker is not active.',
         );
+      }
+
+      // Back-fill the client so the CRM and the booking agree about who
+      // introduced them. Without this the referral would live only on the
+      // booking, and the client record would still read as a direct lead.
+      if (input.brokerId !== undefined || input.leadSource !== undefined) {
+        await tx.client.update({
+          where: { id: client.id },
+          data: { brokerId: broker?.id ?? null, leadSource },
+        });
       }
 
       // --- 2. Freeze the price ---------------------------------------------
@@ -149,7 +168,7 @@ export class BookingsService {
           clientId: client.id,
           salesAgentId: salesAgent.id,
           brokerId: broker?.id ?? null,
-          leadSource: client.leadSource,
+          leadSource,
           unitId: unit.id,
           status: BookingStatus.CONFIRMED,
           bookingDate: input.bookingDate,
@@ -288,7 +307,7 @@ export class BookingsService {
             // the client. A later audit needs to tell those apart.
             salesAgentCode: salesAgent.salesAgentCode,
             brokerCode: broker?.brokerCode ?? null,
-            leadSource: client.leadSource,
+            leadSource,
           },
           reason: attribution.overrideReason ?? null,
         },

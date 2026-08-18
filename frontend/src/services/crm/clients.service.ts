@@ -1,5 +1,4 @@
-import { MOCK_SESSION, getStore } from '@/data/mock-store';
-import { stripCnic, toE164 } from '@/lib/format';
+import { getStore } from '@/data/mock-store';
 import type { Client, CreateClientInput, Paginated } from './types';
 import { IS_MOCK, apiFetch, simulateLatency } from './config';
 
@@ -8,7 +7,7 @@ export interface ClientListQuery {
   page?: number;
   pageSize?: number;
   /** Brokers are scoped to their own book; managers see everything. */
-  brokerId?: string;
+  salesAgentId?: string;
 }
 
 export const clientsService = {
@@ -26,7 +25,9 @@ export const clientsService = {
     const search = query.search?.trim().toLowerCase();
 
     const filtered = getStore().clients.filter((client) => {
-      if (query.brokerId !== undefined && client.brokerId !== query.brokerId) return false;
+      if (query.salesAgentId !== undefined && client.salesAgentId !== query.salesAgentId) {
+        return false;
+      }
       if (search === undefined || search.length === 0) return true;
 
       // Searching by phone or CNIC must work regardless of how the user types
@@ -73,38 +74,10 @@ export const clientsService = {
       });
     }
 
-    await simulateLatency(400);
-    const store = getStore();
-    const broker = MOCK_SESSION.broker;
-
-    const client: Client = {
-      ...input,
-      id: `cli-${store.clients.length + 1}`,
-      clientCode: store.nextCode('CLI'),
-      // Normalised on the way in, exactly as the backend will: CNIC digits
-      // only, phone in E.164, so "35202-1234567-1" and "3520212345671" are the
-      // same person.
-      cnic: stripCnic(input.cnic),
-      mobile: toE164(input.mobile),
-      whatsapp: input.whatsapp ? toE164(input.whatsapp) : undefined,
-      // Attribution comes from the session and is never client-supplied.
-      brokerId: broker?.id ?? 'brk-1',
-      brokerCode: broker?.brokerCode ?? 'BRK-2026-000001',
-      brokerName: broker?.name ?? 'Imran Sheikh',
-      bookingStatus: 'NONE',
-      lastActivityAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-      documents: (input.documents ?? []).map((file, index) => ({
-        id: `doc-${Date.now()}-${index}`,
-        kind: index === 0 ? 'CNIC_FRONT' : index === 1 ? 'CNIC_BACK' : 'CLIENT_PHOTO',
-        fileName: file.name,
-        mimeType: file.type,
-        byteSize: file.size,
-        uploadedAt: new Date().toISOString(),
-      })),
-    };
-
-    store.clients.unshift(client);
-    return client;
+    throw new Error(
+      'Creating a client requires the API. Set NEXT_PUBLIC_DATA_MODE=api and start the ' +
+        'NestJS backend — the Client ID and the Sales Agent attribution are allocated there.',
+    );
   },
+
 };

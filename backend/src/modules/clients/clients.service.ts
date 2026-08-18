@@ -23,7 +23,7 @@ export class ClientsService {
     const pageSize = query.pageSize ?? 25;
 
     const where: Prisma.ClientWhereInput = {
-      ...(scope !== undefined ? { brokerId: scope } : {}),
+      ...(scope !== undefined ? { salesAgentId: scope } : {}),
       ...buildSearch(query.search),
     };
 

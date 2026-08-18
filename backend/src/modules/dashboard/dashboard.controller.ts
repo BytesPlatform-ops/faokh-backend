@@ -23,16 +23,19 @@ export class DashboardController {
     // Explicitly typed rather than inferred. Spreading a `{} | {...}` union into
     // a Prisma `where` widens it enough that a wrong relation name type-checks
     // and only fails at runtime — which is exactly what happened here once.
-    const bookingWhere: Prisma.BookingWhereInput = scope === undefined ? {} : { brokerId: scope };
+    const bookingWhere: Prisma.BookingWhereInput =
+      scope === undefined ? {} : { salesAgentId: scope };
 
     // Instalments hang off a booking...
     const installmentWhere: Prisma.InstallmentWhereInput =
-      scope === undefined ? {} : { booking: { brokerId: scope } };
+      scope === undefined ? {} : { booking: { salesAgentId: scope } };
 
-    // ...but a commission milestone carries the broker directly, and reaches a
-    // booking only through its plan. Same intent, different path.
+    // A commission belongs to a broker, but an agent needs to see the ones on
+    // bookings *they* processed — they field the broker's questions about
+    // payout timing. So it is scoped through the booking, not by broker id,
+    // which would have matched nothing since `scope` is an agent.
     const milestoneWhere: Prisma.CommissionMilestoneWhereInput =
-      scope === undefined ? {} : { brokerId: scope };
+      scope === undefined ? {} : { commissionPlan: { booking: { salesAgentId: scope } } };
 
     const now = new Date();
     const soon = new Date(now.getTime() + 30 * 86_400_000);
@@ -123,7 +126,7 @@ export class DashboardController {
       }),
 
       this.prisma.client.findMany({
-        where: scope === undefined ? {} : { brokerId: scope },
+        where: scope === undefined ? {} : { salesAgentId: scope },
         orderBy: { lastActivityAt: 'desc' },
         take: 5,
         include: {

@@ -17,7 +17,7 @@ import {
 import { findType } from '@/data/master-data';
 import { formatCnic, formatDate, formatPhone } from '@/lib/format';
 import type { Client, SessionUser } from '@/services/crm';
-import { clientsService, isBroker, sessionService } from '@/services/crm';
+import { clientsService, isSalesAgent, sessionService } from '@/services/crm';
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<Client[] | null>(null);
@@ -32,7 +32,7 @@ export default function ClientsPage() {
       const result = await clientsService.list({
         search: term,
         pageSize: 50,
-        ...(isBroker(session) ? { brokerId: session.broker?.id } : {}),
+        ...(isSalesAgent(session) ? { salesAgentId: session.salesAgent?.id } : {}),
       });
       setClients(result.data);
       setError(null);
@@ -49,7 +49,7 @@ export default function ClientsPage() {
     <>
       <PageHeader
         title="Clients"
-        subtitle={user?.broker !== undefined ? `Owned by ${user.broker.brokerCode}` : undefined}
+        subtitle={user?.salesAgent !== undefined ? `Owned by ${user.salesAgent.salesAgentCode}` : undefined}
         actions={<ButtonLink href="/clients/new">Add Client</ButtonLink>}
       />
 

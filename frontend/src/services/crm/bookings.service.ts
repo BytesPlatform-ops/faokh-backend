@@ -29,12 +29,12 @@ export interface BookingPreview {
 }
 
 export const bookingsService = {
-  async list(query: { brokerId?: string; page?: number } = {}): Promise<Paginated<Booking>> {
+  async list(query: { salesAgentId?: string; page?: number } = {}): Promise<Paginated<Booking>> {
     if (!IS_MOCK) return apiFetch<Paginated<Booking>>('/bookings');
 
     await simulateLatency();
     const filtered = getStore().bookings.filter(
-      (booking) => query.brokerId === undefined || booking.brokerId === query.brokerId,
+      (booking) => query.salesAgentId === undefined || booking.salesAgentId === query.salesAgentId,
     );
 
     return {
@@ -136,52 +136,31 @@ export const bookingsService = {
     };
   },
 
+  /**
+   * Confirms a booking.
+   *
+   * Only through the API. Creating one means allocating a gapless booking code,
+   * locking the unit row, freezing a price snapshot, generating a 48-line
+   * schedule and — when a broker introduced the client — a commission plan, all
+   * inside one transaction. None of that can be honestly simulated in a browser
+   * tab, and a mock that appeared to succeed would be the most damaging kind of
+   * fake: one that looks like a sale.
+   */
   async create(input: CreateBookingInput): Promise<Booking> {
-    if (!IS_MOCK) {
-      return apiFetch<Booking>('/bookings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
-      });
+    if (IS_MOCK) {
+      throw new Error(
+        'Confirming a booking requires the API. Set NEXT_PUBLIC_DATA_MODE=api and start the ' +
+          'NestJS backend.',
+      );
     }
 
-    await simulateLatency(600);
-    const store = getStore();
-    const unit = store.units.find((candidate) => candidate.id === input.unitId);
-    const client = store.clients.find((candidate) => candidate.id === input.clientId);
-
-    if (unit === undefined) throw new Error('That unit could not be found.');
-    if (client === undefined) throw new Error('That client could not be found.');
-    if (unit.status !== 'AVAILABLE') {
-      throw new Error(`Unit ${unit.unitNumber} is no longer available.`);
-    }
-
-    const price = findPrice(unit.unitTypeCode, input.classCode);
-    if (
-      price?.needsConfirmation === true &&
-      !inventoryService.isPriceConfirmed(unit.unitTypeCode, input.classCode)
-    ) {
-      throw new Error('This price is provisional and must be confirmed before it can be sold.');
-    }
-
-    const { buildBooking } = await import('@/data/mock-store');
-    const booking = buildBooking(
-      store.bookings.length + 1,
-      client,
-      unit,
-      input.classCode,
-      new Date(input.bookingDate),
-      0,
-    );
-
-    store.bookings.unshift(booking);
-    unit.status = 'BOOKED';
-    unit.classCode = input.classCode;
-    client.bookingStatus = 'BOOKED';
-    client.lastActivityAt = new Date().toISOString();
-
-    return booking;
+    return apiFetch<Booking>('/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
   },
+
 
   /** Today, in the project's timezone, for wizard defaults. */
   defaultBookingDate(): Date {

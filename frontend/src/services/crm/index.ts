@@ -1,7 +1,8 @@
 /** Single import surface for the CRM data layer. */
 export * from './types';
 export { DATA_MODE, IS_MOCK, API_BASE_URL } from './config';
-export { sessionService, canViewCommission, isBroker } from './session.service';
+export { sessionService, canViewCommission, isSalesAgent } from './session.service';
+export { brokersService } from './brokers.service';
 export { clientsService } from './clients.service';
 export { inventoryService } from './inventory.service';
 export { bookingsService, type BookingPreview } from './bookings.service';

@@ -28,7 +28,7 @@ export class BookingsController {
     const scope = visibilityScope(user);
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 25;
-    const where = scope === undefined ? {} : { brokerId: scope };
+    const where = scope === undefined ? {} : { salesAgentId: scope };
 
     const [rows, total] = await Promise.all([
       this.prisma.booking.findMany({
@@ -104,6 +104,8 @@ export class BookingsController {
         unitId: dto.unitId,
         classId: apartmentClass.id,
         bookingDate: dto.bookingDate ?? new Date(),
+        ...(dto.leadSource !== undefined ? { leadSource: dto.leadSource } : {}),
+        ...(dto.brokerId !== undefined ? { brokerId: dto.brokerId } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
       },
       {

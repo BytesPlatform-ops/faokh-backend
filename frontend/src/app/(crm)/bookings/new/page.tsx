@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { BookingSummary, BookingSummaryMobile } from '@/components/booking/BookingSummary';
 import { ClassStep } from '@/components/booking/ClassStep';
 import { ClientStep } from '@/components/booking/ClientStep';
+import { SourceStep } from '@/components/booking/SourceStep';
 import { InstallmentTable, PlanShapeSummary } from '@/components/booking/InstallmentTable';
 import {
   BuildingPicker,
@@ -33,6 +34,8 @@ import { formatArea, formatCnic, formatDate, formatPhone, formatPkr } from '@/li
 import type {
   BookingPreview,
   BookingSelection,
+  Broker,
+  LeadSource,
   ClassCode,
   Client,
   SessionUser,
@@ -68,12 +71,13 @@ import { EMPTY_SELECTION } from '@/services/crm/types';
 
 type StepId =
   | 'CLIENT'
+  | 'SOURCE'
   | 'CATEGORY'
-  | 'LAYOUT'
-  | 'CLASS'
   | 'BUILDING'
+  | 'LAYOUT'
   | 'FLOOR'
   | 'UNIT'
+  | 'CLASS'
   | 'PLAN'
   | 'REVIEW'
   | 'CONFIRM';
@@ -82,14 +86,24 @@ type StepId =
 const STAGES = ['Client', 'Residence', 'Property', 'Payment', 'Review'] as const;
 type Stage = (typeof STAGES)[number];
 
+/**
+ * The order matters, and one part of it is a correction.
+ *
+ * Class comes *after* the physical unit. Classic, Elegant and Sonder are a
+ * finish and service package applied to an apartment, not three separate
+ * apartments — so filtering inventory by class before a unit is chosen would
+ * be filtering on something that is not a property of the stock. Pick the real
+ * apartment first, then decide how it is finished.
+ */
 const STEPS: { id: StepId; stage: Stage; title: string }[] = [
   { id: 'CLIENT', stage: 'Client', title: 'Select or create the client' },
+  { id: 'SOURCE', stage: 'Client', title: 'How did this client come to Foakh?' },
   { id: 'CATEGORY', stage: 'Residence', title: 'What is being booked?' },
-  { id: 'LAYOUT', stage: 'Residence', title: 'Choose the apartment type' },
-  { id: 'CLASS', stage: 'Residence', title: 'Choose the residence class' },
   { id: 'BUILDING', stage: 'Property', title: 'Choose a building' },
+  { id: 'LAYOUT', stage: 'Property', title: 'Choose the apartment type' },
   { id: 'FLOOR', stage: 'Property', title: 'Choose a floor' },
-  { id: 'UNIT', stage: 'Property', title: 'Choose a unit' },
+  { id: 'UNIT', stage: 'Property', title: 'Choose the physical unit' },
+  { id: 'CLASS', stage: 'Residence', title: 'Choose the finish and service class' },
   { id: 'PLAN', stage: 'Payment', title: 'Price and payment plan' },
   { id: 'REVIEW', stage: 'Review', title: 'Review the booking' },
   { id: 'CONFIRM', stage: 'Review', title: 'Confirm' },
@@ -107,6 +121,11 @@ function WizardContent() {
   // is a single obvious operation rather than six scattered setState calls that
   // can fall out of step with each other.
   const [client, setClient] = useState<Client | null>(null);
+
+  // How the client reached Foakh, and the external partner who introduced them.
+  // The Sales Agent is deliberately absent here — it comes from the session.
+  const [leadSource, setLeadSource] = useState<LeadSource>('DIRECT');
+  const [broker, setBroker] = useState<Broker | null>(null);
   const [selection, setSelection] = useState<BookingSelection>(EMPTY_SELECTION);
   const [unit, setUnit] = useState<Unit | null>(null);
   const [preview, setPreview] = useState<BookingPreview | null>(null);
@@ -182,13 +201,17 @@ function WizardContent() {
    * remember.
    */
   function choose(next: Partial<BookingSelection>, clearUnitFrom: keyof BookingSelection) {
+    // Must match the wizard's step order exactly. It previously listed class
+    // before building, which was correct when class was chosen early — after
+    // the reorder it meant picking a Type silently wiped the Building chosen
+    // one step earlier, and the floor screen then had nothing to show.
     const order: (keyof BookingSelection)[] = [
       'residenceCategory',
-      'unitTypeCode',
-      'classCode',
       'buildingCode',
+      'unitTypeCode',
       'floorLevel',
       'unitId',
+      'classCode',
     ];
     const from = order.indexOf(clearUnitFrom);
     const cleared = Object.fromEntries(
@@ -233,6 +256,10 @@ function WizardContent() {
     switch (step.id) {
       case 'CLIENT':
         return client !== null;
+      case 'SOURCE':
+        // A broker-sourced client without a broker would silently lose the
+        // referral, and with it the commission.
+        return leadSource !== 'BROKER' || broker !== null;
       case 'CATEGORY':
         return selection.residenceCategory !== null;
       case 'LAYOUT':
@@ -257,7 +284,7 @@ function WizardContent() {
       default:
         return false;
     }
-  }, [step.id, client, selection, unit, preview, acknowledged]);
+  }, [step.id, client, leadSource, broker, selection, unit, preview, acknowledged]);
 
   /**
    * Ratifies the provisional price and re-prices the booking.
@@ -276,7 +303,7 @@ function WizardContent() {
       await inventoryService.confirmPrice(
         unit.unitTypeCode,
         selection.classCode,
-        user?.broker?.brokerCode ?? 'UNKNOWN',
+        user?.salesAgent?.salesAgentCode ?? 'UNKNOWN',
       );
       // Re-priced through the same path as any other change, so the schedule
       // and commission are regenerated rather than patched.
@@ -300,6 +327,10 @@ function WizardContent() {
         clientId: client.id,
         unitId: unit.id,
         classCode: selection.classCode,
+        // Carried from the Source step. The client was created before it was
+        // known, so the server records it on both.
+        leadSource,
+        ...(broker !== null ? { brokerId: broker.id } : {}),
         bookingDate: bookingDate.toISOString(),
         notes: notes.trim() || undefined,
       });
@@ -314,7 +345,7 @@ function WizardContent() {
 
   const summaryData = {
     client,
-    broker: user?.broker,
+    salesAgent: user?.salesAgent,
     unit,
     classCode: selection.classCode,
     totalPaisa: preview?.totalPaisa ?? null,
@@ -389,7 +420,16 @@ function WizardContent() {
           <CardHeader title={step.title} subtitle={stage} />
           <div className="p-5">
             {step.id === 'CLIENT' && (
-              <ClientStep selected={client} onSelect={setClient} brokerId={user?.broker?.id} />
+              <ClientStep selected={client} onSelect={setClient} />
+            )}
+
+            {step.id === 'SOURCE' && (
+              <SourceStep
+                leadSource={leadSource}
+                broker={broker}
+                onChangeSource={setLeadSource}
+                onSelectBroker={setBroker}
+              />
             )}
 
             {step.id === 'CATEGORY' && (
@@ -556,7 +596,7 @@ function WizardContent() {
                         >
                           {confirmingPrice
                             ? 'Confirming…'
-                            : `Confirm this price as ${user?.broker?.brokerCode ?? 'broker'}`}
+                            : `Confirm this price as ${user?.salesAgent?.salesAgentCode ?? 'broker'}`}
                         </Button>
                       </div>
                     </div>
@@ -621,14 +661,32 @@ function WizardContent() {
                           value={formatPkr(preview.installments[0]?.amountPaisa ?? 0)}
                         />
                         <Detail
-                          label="Broker"
+                          label="Handled by"
                           value={
-                            <span className="font-mono">{user?.broker?.brokerCode ?? '—'}</span>
+                            <span className="font-mono">
+                              {user?.salesAgent?.salesAgentCode ?? '—'}
+                            </span>
                           }
                         />
                         <Detail
-                          label="Commission (4%)"
-                          value={formatPkr(preview.commissionTotalPaisa)}
+                          label="Introduced by"
+                          value={
+                            broker === null ? (
+                              'Direct'
+                            ) : (
+                              <span className="font-mono">{broker.brokerCode}</span>
+                            )
+                          }
+                        />
+                        {/* Only a referred sale produces one. A direct sale
+                            shows none, because none will be created. */}
+                        <Detail
+                          label="Broker commission"
+                          value={
+                            broker === null
+                              ? 'None — direct sale'
+                              : formatPkr(preview.commissionTotalPaisa)
+                          }
                         />
                       </dl>
                     </div>

@@ -20,14 +20,19 @@ export const sessionService = {
   },
 };
 
+/**
+ * Whether this user may see broker commission figures.
+ *
+ * A Sales Agent needs to, because they answer the broker's questions about
+ * payout timing. The figure is still absent from the client copy of an invoice
+ * entirely — this governs CRM screens, not documents.
+ */
 export function canViewCommission(user: SessionUser): boolean {
-  // A broker sees their own commission; finance and management see all. Nobody
-  // else does, and the client copy of an invoice never shows it at all.
   return user.roles.some((role) =>
-    ['BROKER', 'FINANCE', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(role),
+    ['SALES_AGENT', 'FINANCE', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(role),
   );
 }
 
-export function isBroker(user: SessionUser): boolean {
-  return user.roles.includes('BROKER');
+export function isSalesAgent(user: SessionUser): boolean {
+  return user.roles.includes('SALES_AGENT');
 }

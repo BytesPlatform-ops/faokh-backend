@@ -16,7 +16,7 @@ import {
 } from '@/components/ui';
 import { formatDate, formatPkr } from '@/lib/format';
 import type { Booking, SessionUser } from '@/services/crm';
-import { bookingsService, isBroker, sessionService } from '@/services/crm';
+import { bookingsService, isSalesAgent, sessionService } from '@/services/crm';
 
 export default function BookingsPage() {
   const [bookings, setBookings] = useState<Booking[] | null>(null);
@@ -28,8 +28,8 @@ export default function BookingsPage() {
       const session = await sessionService.current();
       setUser(session);
       const result = await bookingsService.list({
-        // Row-level scoping: a broker's list is their own book.
-        ...(isBroker(session) ? { brokerId: session.broker?.id } : {}),
+        // Row-level scoping: a Sales Agent's list is their own book.
+        ...(isSalesAgent(session) ? { salesAgentId: session.salesAgent?.id } : {}),
       });
       setBookings(result.data);
       setError(null);
@@ -47,7 +47,7 @@ export default function BookingsPage() {
       <PageHeader
         title="Bookings"
         subtitle={
-          user?.broker !== undefined ? `Attributed to ${user.broker.brokerCode}` : undefined
+          user?.salesAgent !== undefined ? `Handled by ${user.salesAgent.salesAgentCode}` : undefined
         }
         actions={<ButtonLink href="/bookings/new">New Booking</ButtonLink>}
       />

@@ -21,7 +21,7 @@ import {
   type DashboardMetrics,
   type SessionUser,
   dashboardService,
-  isBroker,
+  isSalesAgent,
   sessionService,
 } from '@/services/crm';
 
@@ -42,7 +42,7 @@ export default function DashboardPage() {
       const session = await sessionService.current();
       setUser(session);
       // Brokers see their own book; managers and finance see everything.
-      const scope = isBroker(session) ? session.broker?.id : undefined;
+      const scope = isSalesAgent(session) ? session.salesAgent?.id : undefined;
       setMetrics(await dashboardService.metrics(scope));
       setError(null);
     } catch (caught) {
@@ -72,15 +72,15 @@ export default function DashboardPage() {
     );
   }
 
-  const broker = user.broker;
+  const agent = user.salesAgent;
 
   return (
     <>
       <PageHeader
         title={`Good day, ${user.name.split(' ')[0]}`}
         subtitle={
-          broker !== undefined
-            ? `Broker ${broker.brokerCode} · ${broker.commissionRatePct}% commission`
+          agent !== undefined
+            ? `${agent.name} · ${agent.salesAgentCode}`
             : 'Foakh Wind Corridor Enclave'
         }
         actions={<ButtonLink href="/bookings/new">New Booking</ButtonLink>}
