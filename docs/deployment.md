@@ -1,5 +1,13 @@
 # Deployment
 
+> **Status.** The GitHub Actions pipeline described below is not currently wired
+> up. Both applications deploy through Vercel's git integration — `faokh-crm`
+> (frontend) and `faokh-crm-backend` (API) build on every push to `main`. The
+> workflow that used to build GHCR images was removed: its deploy steps were
+> placeholders that shipped nothing, and it failed on every push. This document
+> stays as the design for a container-hosted pipeline, which is what the
+> `Dockerfile`s and the expand/contract migration discipline below assume.
+
 ## Environments
 
 | | Staging | Production |
@@ -62,8 +70,8 @@ incident.
 
 Prefer OIDC federation over long-lived access keys stored as secrets. A leaked static
 key is valid until someone notices; a federated token is scoped to a single workflow
-run. The `deploy.yml` job requests `id-token: write` and has the wiring commented in
-place for the target platform.
+run. A deploy job needs `id-token: write` for the exchange, and the target
+platform's federation wiring in place of a static key.
 
 ## Migrations
 
