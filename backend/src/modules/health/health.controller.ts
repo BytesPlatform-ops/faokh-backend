@@ -2,6 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { Public } from '../../common/decorators/auth.decorators';
+import { httpFetch } from '../../common/http/fetch';
 import { PrismaService } from '../../database/prisma.service';
 
 @ApiTags('health')
@@ -75,7 +76,7 @@ export class HealthController {
       // single slow round trip should not report a healthy service as degraded.
       // Liveness is /health/live, which deliberately checks nothing external,
       // so a blip here never causes a restart.
-      const response = await fetch(`${url}/auth/v1/.well-known/jwks.json`, {
+      const response = await httpFetch(`${url}/auth/v1/.well-known/jwks.json`, {
         signal: AbortSignal.timeout(5_000),
       });
       return response.ok ? 'up' : 'down';

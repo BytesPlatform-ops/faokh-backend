@@ -23,6 +23,8 @@ import { randomBytes } from 'node:crypto';
 
 import { PrismaClient } from '@prisma/client';
 
+import { FetchInit, FetchResponse, httpFetch } from '../src/common/http/fetch';
+
 const prisma = new PrismaClient();
 
 const SUPABASE_URL = requireEnv('SUPABASE_URL');
@@ -123,8 +125,8 @@ async function updatePassword(id: string, password: string): Promise<void> {
   });
 }
 
-async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await fetch(`${SUPABASE_URL}${path}`, {
+async function authFetch(path: string, init: FetchInit = {}): Promise<FetchResponse> {
+  const response = await httpFetch(`${SUPABASE_URL}${path}`, {
     ...init,
     headers: {
       apikey: SERVICE_ROLE_KEY,

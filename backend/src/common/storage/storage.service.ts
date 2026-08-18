@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { AppException } from '../errors/app.exception';
+import { FetchInit, FetchResponse, httpFetch } from '../http/fetch';
 
 /**
  * Private document storage, backed by Supabase Storage.
@@ -152,8 +153,8 @@ export class StorageService {
     }
   }
 
-  private request(path: string, init: RequestInit): Promise<Response> {
-    return fetch(`${this.url}${path}`, {
+  private request(path: string, init: FetchInit): Promise<FetchResponse> {
+    return httpFetch(`${this.url}${path}`, {
       ...init,
       headers: {
         apikey: this.serviceKey,
