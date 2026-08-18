@@ -11,6 +11,7 @@ faokh-backend/
 └── docs/        architecture, ERD, deployment, security
 ```
 
+
 The existing Foakh marketing site is a **separate application and is not touched by
 this project**. It stays the brand's front door; this is the concierge wing behind it.
 
