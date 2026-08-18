@@ -1,5 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RoleName, UserStatus } from '@prisma/client';
+// Pinned to jose 5, deliberately. Version 6 is ESM-only — its package exports
+// carry no `require` condition — and this service compiles to CommonJS, so
+// `require('jose')` throws ERR_REQUIRE_ESM the moment the built app starts on a
+// runtime without Node's require-of-ESM support. Recent Node versions have it,
+// which is why a development machine never notices; the deployed API died on
+// every request until this was pinned back. Upgrade only alongside a move to
+// ESM output.
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
 import { AppException } from '../../common/errors/app.exception';

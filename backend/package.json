@@ -1,7 +1,7 @@
 {
   "name": "foakh-booking-api",
   "version": "0.1.0",
-  "description": "Foakh Wind Corridor Enclave \u2014 booking & sales CRM API",
+  "description": "Foakh Wind Corridor Enclave — booking & sales CRM API",
   "license": "UNLICENSED",
   "private": true,
   "engines": {
@@ -58,7 +58,7 @@
     "googleapis": "^165.0.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.9.0",
-    "jose": "^6.2.9",
+    "jose": "^5.10.0",
     "libphonenumber-js": "^1.12.28",
     "luxon": "^3.7.2",
     "nestjs-pino": "^4.4.1",
