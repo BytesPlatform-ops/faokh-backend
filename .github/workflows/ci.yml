@@ -1,0 +1,275 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push supersedes an in-flight run on the same branch; there is no value
+# in finishing CI for a commit nobody will merge.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Only run the half of CI that a change actually touches. A frontend-only PR
+  # should not spend four minutes spinning up Postgres.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/**'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/**'
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: foakh
+          POSTGRES_PASSWORD: foakh
+          POSTGRES_DB: foakh_booking_test
+        ports: ['5432:5432']
+        # Without a health check the job races the container and fails
+        # intermittently on a cold runner.
+        options: >-
+          --health-cmd "pg_isready -U foakh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://foakh:foakh@localhost:5432/foakh_booking_test?schema=public
+      TEST_DATABASE_URL: postgresql://foakh:foakh@localhost:5432/foakh_booking_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      QUEUES_ENABLED: 'false'
+      SESSION_SECRET: ci-session-secret-value-at-least-32-characters-long
+      # Deterministic CI-only key. Real environments generate their own.
+      ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm prisma:generate
+
+      - name: Validate Prisma schema
+        run: pnpm prisma:validate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Apply migrations
+        run: pnpm prisma migrate deploy
+
+      # Proves the checked-in migration SQL matches the schema. Without this a
+      # schema edit can ship with no corresponding migration and only fail on
+      # the production deploy.
+      - name: Check migrations are in sync with the schema
+        run: |
+          pnpm prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url "$DATABASE_URL" \
+            --exit-code || {
+              echo "::error::schema.prisma has drifted from prisma/migrations. Run: pnpm prisma migrate dev"
+              exit 1
+            }
+
+      - name: Integration and API tests
+        run: pnpm test:int
+
+      - name: Generate OpenAPI document
+        run: pnpm openapi:generate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: backend/openapi.json
+          if-no-files-found: error
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build Docker image
+        run: docker build -t foakh-api:ci .
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api/v1
+
+      - name: Build Docker image
+        run: docker build -t foakh-web:ci .
+
+  # The end-to-end suite needs the whole stack, so it runs once both halves are
+  # green rather than duplicating their setup.
+  e2e:
+    needs: [changes, backend, frontend]
+    # `always()` plus explicit checks: skipped jobs must not fail this one, but
+    # a genuine failure upstream must.
+    if: |
+      always() &&
+      needs.backend.result != 'failure' &&
+      needs.frontend.result != 'failure' &&
+      (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true')
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: foakh
+          POSTGRES_PASSWORD: foakh
+          POSTGRES_DB: foakh_booking
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U foakh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://foakh:foakh@localhost:5432/foakh_booking?schema=public
+      QUEUES_ENABLED: 'false'
+      SESSION_SECRET: ci-session-secret-value-at-least-32-characters-long
+      ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+      API_PUBLIC_URL: http://localhost:4000
+      WEB_PUBLIC_URL: http://localhost:3000
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api/v1
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Start the API
+        working-directory: backend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm prisma:generate
+          pnpm prisma migrate deploy
+          pnpm seed
+          pnpm build
+          # Backgrounded, with output captured so a crash is diagnosable from
+          # the workflow log rather than only as a connection refused.
+          node dist/main.js > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:4000/api/v1/health/live && break
+            sleep 2
+          done
+          curl -sf http://localhost:4000/api/v1/health/live || { cat /tmp/api.log; exit 1; }
+
+      - name: Build and start the web app
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm start > /tmp/web.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:3000/sign-in && break
+            sleep 2
+          done
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Run E2E tests
+        working-directory: frontend
+        run: pnpm exec playwright test --project=chromium --project=mobile-320
+        env:
+          E2E_BASE_URL: http://localhost:3000
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

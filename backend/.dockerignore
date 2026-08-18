@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+test
+.env
+.env.*
+!.env.example
+*.log
+.git
+.github
+*.md
+!README.md
+.eslintcache
+*.tsbuildinfo
+jest.config.ts
+jest.integration.config.ts
+eslint.config.mjs

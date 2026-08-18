@@ -1,0 +1,272 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   FOAKH BOOKING — brand system
+
+   The tokens below are lifted verbatim from the Foakh marketing site, so the
+   booking journey is unmistakably the same brand. What changes is the
+   *rhythm*, not the palette:
+
+     Marketing site   cinematic · exploratory · immersive
+     Booking journey  premium · focused · reassuring · fast
+     CRM              premium · dense enough to work in · extremely clear
+
+   So there is no scroll-triggered choreography here. A person booking a
+   viewing is completing a task, and a task interface that performs at them is
+   an obstacle. The brand shows up in colour, type and restraint instead.
+
+   Do not introduce near-duplicate colours. If a value is missing, add it here.
+   ========================================================================== */
+:root {
+  --foakh-terracotta: #b65438;
+  --foakh-terracotta-deep: #94432f;
+  --foakh-terracotta-dark: #713427;
+  --foakh-terracotta-soft: #d78b70;
+
+  --foakh-cream: #f5ede3;
+  --foakh-cream-soft: #faf6f0;
+  --foakh-cream-warm: #eee1d3;
+
+  --foakh-ink: #2b211d;
+  --foakh-text: #625750;
+  --foakh-muted: #91867e;
+
+  --foakh-gold: #c99355;
+  --foakh-gold-light: #e8cfa4;
+  --foakh-forest: #294a3e;
+
+  --foakh-border: rgba(119, 65, 47, 0.14);
+  --foakh-border-strong: rgba(119, 65, 47, 0.28);
+
+  --foakh-shadow-soft: 0 10px 30px rgba(55, 31, 23, 0.06);
+  --foakh-shadow-medium: 0 18px 55px rgba(55, 31, 23, 0.1);
+  --foakh-shadow-strong: 0 28px 80px rgba(55, 31, 23, 0.14);
+
+  --foakh-radius-sm: 10px;
+  --foakh-radius: 16px;
+  --foakh-radius-card: 18px;
+  --foakh-radius-media: 22px;
+
+  /* Semantic aliases — components reference these, not raw colours, so a
+     palette change is a one-line edit. */
+  --surface: var(--foakh-cream-soft);
+  --surface-raised: #ffffff;
+  --surface-sunken: var(--foakh-cream);
+  --on-surface: var(--foakh-ink);
+  --on-surface-muted: var(--foakh-text);
+  --accent: var(--foakh-terracotta);
+  --accent-strong: var(--foakh-terracotta-deep);
+  --focus-ring: var(--foakh-terracotta-deep);
+}
+
+@theme inline {
+  --color-cream: var(--foakh-cream);
+  --color-cream-soft: var(--foakh-cream-soft);
+  --color-cream-warm: var(--foakh-cream-warm);
+  --color-ink: var(--foakh-ink);
+  --color-body: var(--foakh-text);
+  --color-muted: var(--foakh-muted);
+  --color-terracotta: var(--foakh-terracotta);
+  --color-terracotta-deep: var(--foakh-terracotta-deep);
+  --color-terracotta-dark: var(--foakh-terracotta-dark);
+  --color-gold: var(--foakh-gold);
+  --color-gold-light: var(--foakh-gold-light);
+  --color-forest: var(--foakh-forest);
+
+  --font-display: var(--font-display), Georgia, 'Times New Roman', serif;
+  --font-sans: var(--font-sans), system-ui, -apple-system, sans-serif;
+
+  --radius-card: var(--foakh-radius-card);
+  --radius-media: var(--foakh-radius-media);
+}
+
+* {
+  border-color: var(--foakh-border);
+}
+
+html {
+  /* Anchored jumps between booking steps should not slam. */
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* --------------------------------------------------------------- focus ---
+   WCAG 2.2 tightened the rules on focus visibility. A single global style
+   means no component can quietly ship without a visible focus indicator, and
+   the 3:1 contrast against both cream and white is checked here once. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* Mouse users do not see the ring; keyboard users always do. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ------------------------------------------------------------ motion ---
+   Every transition in the application funnels through these two utilities,
+   so honouring prefers-reduced-motion is a single rule rather than a promise
+   each component has to keep. */
+.transition-brand {
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+.rise-in {
+  animation: rise-in 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --------------------------------------------------------- components --- */
+
+.card {
+  background: var(--surface-raised);
+  border: 1px solid var(--foakh-border);
+  border-radius: var(--foakh-radius-card);
+  box-shadow: var(--foakh-shadow-soft);
+}
+
+/* Selectable cards wrap a visually-hidden radio or checkbox. The real control
+   keeps the semantics (and arrow-key navigation); the card it sits inside has
+   to show the focus ring, or a keyboard user cannot see where they are. */
+label:has(input[type='radio']:focus-visible),
+label:has(input[type='checkbox']:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+/* WCAG 2.2 requires a 24×24 CSS-pixel minimum target. 44px is the comfortable
+   figure for a thumb on a phone, which is where most of these bookings start. */
+.tap-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Keyboard users land here first; it stays hidden until focused. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 0.75rem 1.25rem;
+  background: var(--foakh-ink);
+  color: var(--foakh-cream-soft);
+  border-radius: 0 0 var(--foakh-radius-sm) 0;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+/* The grain overlay that gives Foakh surfaces their paper quality. */
+.grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ==========================================================================
+   PRINT — A4 landscape invoice
+   The preview is laid out at the real sheet aspect ratio, so what a broker
+   reviews on screen is what comes out of the printer. Everything that is not
+   the document itself is removed from the printed page.
+   ========================================================================== */
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  /* The CRM shell — sidebar, top bar, bottom nav — is screen furniture. */
+  aside,
+  header,
+  nav,
+  .skip-link {
+    display: none !important;
+  }
+
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .invoice-sheet {
+    width: 100% !important;
+    box-shadow: none !important;
+  }
+
+  /* A payment schedule split mid-row across two sheets is unreadable. */
+  table {
+    break-inside: auto;
+  }
+  tr {
+    break-inside: avoid;
+    break-after: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+}

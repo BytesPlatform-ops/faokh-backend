@@ -1,0 +1,72 @@
+/**
+ * Every error this API returns carries one of these stable codes. The frontend
+ * branches on `code`, never on `message` — messages are copy and will change.
+ */
+export const ErrorCode = {
+  // --- generic ---------------------------------------------------------------
+  VALIDATION_FAILED: 'VALIDATION_FAILED',
+  NOT_FOUND: 'NOT_FOUND',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  RATE_LIMITED: 'RATE_LIMITED',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+
+  // --- auth / access ---------------------------------------------------------
+  UNAUTHENTICATED: 'UNAUTHENTICATED',
+  FORBIDDEN: 'FORBIDDEN',
+  SESSION_EXPIRED: 'SESSION_EXPIRED',
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  OAUTH_STATE_INVALID: 'OAUTH_STATE_INVALID',
+  OAUTH_EXCHANGE_FAILED: 'OAUTH_EXCHANGE_FAILED',
+  OAUTH_IDENTITY_REJECTED: 'OAUTH_IDENTITY_REJECTED',
+  OAUTH_NOT_CONFIGURED: 'OAUTH_NOT_CONFIGURED',
+  ACCOUNT_NOT_PROVISIONED: 'ACCOUNT_NOT_PROVISIONED',
+  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
+  CSRF_TOKEN_INVALID: 'CSRF_TOKEN_INVALID',
+
+  // --- booking ---------------------------------------------------------------
+  SLOT_UNAVAILABLE: 'SLOT_UNAVAILABLE',
+  SLOT_NOT_FOUND: 'SLOT_NOT_FOUND',
+  SLOT_IN_PAST: 'SLOT_IN_PAST',
+  SLOT_TYPE_MISMATCH: 'SLOT_TYPE_MISMATCH',
+  DRAFT_NOT_FOUND: 'DRAFT_NOT_FOUND',
+  DRAFT_EXPIRED: 'DRAFT_EXPIRED',
+  DRAFT_ALREADY_SUBMITTED: 'DRAFT_ALREADY_SUBMITTED',
+  DRAFT_INCOMPLETE: 'DRAFT_INCOMPLETE',
+  BOOKING_NOT_FOUND: 'BOOKING_NOT_FOUND',
+  BOOKING_NOT_MODIFIABLE: 'BOOKING_NOT_MODIFIABLE',
+  MANAGE_TOKEN_INVALID: 'MANAGE_TOKEN_INVALID',
+
+  // --- idempotency -----------------------------------------------------------
+  IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
+  IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
+  IDEMPOTENT_REQUEST_IN_PROGRESS: 'IDEMPOTENT_REQUEST_IN_PROGRESS',
+
+  // --- CRM -------------------------------------------------------------------
+  STAGE_NOT_FOUND: 'STAGE_NOT_FOUND',
+  STAGE_TRANSITION_INVALID: 'STAGE_TRANSITION_INVALID',
+  LOST_REASON_REQUIRED: 'LOST_REASON_REQUIRED',
+  CONTACT_IDENTIFIER_REQUIRED: 'CONTACT_IDENTIFIER_REQUIRED',
+  DUPLICATE_RESOURCE: 'DUPLICATE_RESOURCE',
+
+  // --- integrations ----------------------------------------------------------
+  CALENDAR_NOT_CONNECTED: 'CALENDAR_NOT_CONNECTED',
+  CALENDAR_DISABLED: 'CALENDAR_DISABLED',
+  INTEGRATION_FAILED: 'INTEGRATION_FAILED',
+
+  // --- broker CRM ------------------------------------------------------------
+  UNIT_NOT_AVAILABLE: 'UNIT_NOT_AVAILABLE',
+  PRICE_NOT_CONFIGURED: 'PRICE_NOT_CONFIGURED',
+  /// The Type D Elegant/Sonder guard: a figure Foakh has not ratified must
+  /// never become a signed contract.
+  PRICE_NEEDS_CONFIRMATION: 'PRICE_NEEDS_CONFIRMATION',
+  BROKER_REQUIRED: 'BROKER_REQUIRED',
+  BROKER_NOT_ACTIVE: 'BROKER_NOT_ACTIVE',
+  ATTRIBUTION_REASON_REQUIRED: 'ATTRIBUTION_REASON_REQUIRED',
+  CLIENT_NOT_FOUND: 'CLIENT_NOT_FOUND',
+  DUPLICATE_CNIC: 'DUPLICATE_CNIC',
+
+  // --- feature flags ---------------------------------------------------------
+  FEATURE_DISABLED: 'FEATURE_DISABLED',
+} as const;
+
+export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

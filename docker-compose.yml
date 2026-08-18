@@ -1,0 +1,112 @@
+# Local development stack for the Foakh monorepo.
+#
+# By default this brings up only the infrastructure (Postgres + Redis) and the
+# two applications run on the host, where hot reload is fast:
+#
+#   docker compose up -d                 # postgres + redis
+#   cd backend  && pnpm start:dev        # API  on :4000
+#   cd frontend && pnpm dev              # web  on :3000
+#
+# The `apps` profile additionally builds and runs both applications in
+# containers, which is what CI and staging exercise:
+#
+#   docker compose --profile apps up -d --build
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: foakh-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: foakh
+      POSTGRES_PASSWORD: foakh
+      POSTGRES_DB: foakh_booking
+      # Deterministic collation keeps ORDER BY identical across machines.
+      POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US --encoding=UTF8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - foakh-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U foakh -d foakh_booking']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: foakh-redis
+    restart: unless-stopped
+    # BullMQ requires eviction to be disabled — an evicted job key is a lost job.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '6379:6379'
+    volumes:
+      - foakh-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    profiles: ['apps']
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: foakh-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '4000'
+      DATABASE_URL: postgresql://foakh:foakh@postgres:5432/foakh_booking?schema=public
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - ./backend/.env
+    ports:
+      - '4000:4000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    profiles: ['apps']
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        # Next.js inlines NEXT_PUBLIC_* at build time, so it must be an
+        # argument rather than only a runtime environment variable.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api/v1
+    container_name: foakh-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      # Server-side calls go container-to-container; the browser uses the
+      # public URL baked in above.
+      API_INTERNAL_BASE_URL: http://api:4000/api/v1
+    ports:
+      - '3000:3000'
+
+volumes:
+  foakh-postgres-data:
+  foakh-redis-data:

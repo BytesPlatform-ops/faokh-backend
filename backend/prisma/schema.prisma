@@ -1,0 +1,1000 @@
+// =============================================================================
+// Foakh Wind Corridor Enclave — Broker Booking CRM
+//
+// PostgreSQL. Every money column is NUMERIC (Prisma `Decimal`), never a float:
+// a 0.1 + 0.2 rounding error inside a PKR 64,000,000 payment plan is not a
+// rounding error, it is a dispute.
+//
+// Two ideas run through this schema and are worth reading before the models:
+//
+//  0. **residence_category → unit_type → class.** A duplex penthouse is its own
+//     category, not a layout; bedroom count is a specification, not a type.
+//  1. **unit_type + class = price.** Apartment specifications (area, bedrooms,
+//     balcony, parking) live once, on the unit type. Furnishing level lives
+//     once, on the class. Price is the intersection of the two, in
+//     `pricing_configurations`. Adding a fourth class is a row, not a
+//     migration, and no specification is ever duplicated per class.
+//
+//  2. **Bookings snapshot everything.** A booking copies the unit spec, the
+//     area, the per-sq-ft rate and the agreed total at the moment it is
+//     confirmed. Later price changes cannot reach back and alter a signed
+//     deal — which is the whole point of an agreement.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+
+  /// Lets a query fetch its relations with a SQL JOIN instead of one extra
+  /// round trip per relation.
+  ///
+  /// This matters far more than it looks. The database is Supabase in another
+  /// region, where a single round trip costs roughly 750ms, so a list of units
+  /// with four relations was spending three seconds doing almost no work —
+  /// almost all of it waiting for the network, five times over.
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+
+  // Runtime connection. On Supabase this is the Supavisor **transaction**-mode
+  // pooler (port 6543): serverless and multi-replica runtimes open far more
+  // connections than Postgres will accept directly, and the pooler is what
+  // keeps that from exhausting the database.
+  url = env("DATABASE_URL")
+
+  // Migrations need a **direct** connection (port 5432). Transaction-mode
+  // pooling does not support the session-level constructs DDL relies on —
+  // running `migrate deploy` through the pooler fails in confusing ways.
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// IDENTITY AND ACCESS
+// -----------------------------------------------------------------------------
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  FINANCE
+
+  /// Internal Foakh sales employee. Was called BROKER, which wrongly made the
+  /// person selling on Foakh's behalf look like an outside channel partner.
+  SALES_AGENT
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+model User {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Supabase Auth `sub`. Nullable so a profile can be provisioned by an
+  /// administrator before the person has ever signed in, and so identity
+  /// providers can be changed without rewriting historical bookings.
+  supabaseUserId String? @unique @map("supabase_user_id") @db.Uuid
+
+  email        String     @unique
+  displayName  String     @map("display_name")
+  phone        String?
+  passwordHash String?    @map("password_hash")
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?  @map("last_login_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  roles      UserRole[]
+  sessions   Session[]
+  salesAgent SalesAgent?
+
+  auditLogs          AuditLog[]
+  createdClients     Client[]               @relation("ClientCreatedBy")
+  createdBookings    Booking[]              @relation("BookingCreatedBy")
+  cancelledBookings  Booking[]              @relation("BookingCancelledBy")
+  recordedPayments   Payment[]
+  approvedMilestones CommissionMilestone[]  @relation("MilestoneApprovedBy")
+  generatedInvoices  Invoice[]
+  uploadedDocuments  Document[]
+  confirmedPricing   PricingConfiguration[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        RoleName @unique
+  description String?
+
+  users UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+/// Opaque, server-side, revocable. Only the SHA-256 of the cookie value is
+/// stored, so a database leak does not hand over live sessions, and disabling a
+/// departing broker takes effect on their next request rather than whenever a
+/// self-contained token happens to expire.
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// -----------------------------------------------------------------------------
+// HUMAN-READABLE IDENTIFIERS
+// -----------------------------------------------------------------------------
+
+/// Backs `CLI-2026-000001` and friends.
+///
+/// A dedicated counter table rather than a Postgres sequence, because the
+/// counter resets each calendar year and must be allocated inside the same
+/// transaction as the row it names — an allocated-but-unused number leaves a
+/// visible gap that finance staff will ask about.
+model IdSequence {
+  id        String   @id @default(uuid()) @db.Uuid
+  prefix    String
+  year      Int
+  lastValue Int      @default(0) @map("last_value")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([prefix, year])
+  @@map("id_sequences")
+}
+
+// -----------------------------------------------------------------------------
+// PROJECT, INVENTORY AND PRODUCT MASTER DATA
+// -----------------------------------------------------------------------------
+
+model Project {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+  name String
+
+  /// The single source of the project address.
+  ///
+  /// Printed on every invoice and shown in the CRM header. Held here rather
+  /// than in code so an address correction is a data change, and so no screen
+  /// can quietly keep using an older Foakh address.
+  addressLine String @default("2FQ3+W4X, DHA City") @map("address_line")
+
+  city     String @default("Karachi")
+  province String @default("Sindh")
+  country  String @default("Pakistan")
+  timezone String @default("Asia/Karachi")
+
+  totalFloors Int @default(12) @map("total_floors")
+
+  /// Admin-configured. Deliberately nullable and never invented: every booking
+  /// copies this onto its completion instalment, and a guessed handover date
+  /// becomes a contractual date on a printed schedule.
+  expectedHandoverDate DateTime? @map("expected_handover_date") @db.Date
+
+  currency  String   @default("PKR")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  buildings Building[]
+
+  @@map("projects")
+}
+
+model Building {
+  id        String @id @default(uuid()) @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  code      String
+  name      String
+  sortOrder Int    @default(0) @map("sort_order")
+
+  /// How many units this building is expected to hold. Currently 20 per
+  /// building by instruction. The distribution across types and floors is NOT
+  /// encoded here — an admin allocates it, because nobody has told us how the
+  /// 20 break down.
+  plannedUnitCount Int @default(20) @map("planned_unit_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  floors  Floor[]
+  units   Unit[]
+
+  @@unique([projectId, code])
+  @@map("buildings")
+}
+
+model Floor {
+  id         String  @id @default(uuid()) @db.Uuid
+  buildingId String  @map("building_id") @db.Uuid
+  level      Int
+  label      String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  units    Unit[]
+
+  @@unique([buildingId, level])
+  @@map("floors")
+}
+
+/// What kind of residence this is.
+///
+/// A duplex penthouse is not a fifth apartment layout. It has its own area, its
+/// own floor span and no A–D specification, so it is a sibling of the apartment
+/// category rather than a member of it — and it must never surface as "Type E".
+enum ResidenceCategory {
+  APARTMENT
+  DUPLEX_PENTHOUSE
+}
+
+/// The layout specification. Written once, referenced by every class.
+///
+/// Everything here is a *consequence* of the layout: a broker chooses Type A and
+/// the bedrooms, bathrooms, balcony, parking and area follow. None of it is
+/// separately selectable, and bedroom count is emphatically not a residence type.
+model UnitType {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+  name String
+
+  residenceCategory ResidenceCategory @default(APARTMENT) @map("residence_category")
+
+  areaSqFt  Decimal @map("area_sq_ft") @db.Decimal(10, 2)
+  bedrooms  Int
+  bathrooms Int
+
+  /// Type A's three bathrooms are all en-suite — a stated selling point, so it
+  /// is master data rather than something a broker recalls from memory.
+  attachedBathrooms Int @default(0) @map("attached_bathrooms")
+
+  hasBalcony Boolean @default(false) @map("has_balcony")
+
+  /// Type C and D include none — parking is bought separately.
+  includedParkingSpaces Int @default(0) @map("included_parking_spaces")
+
+  /// True where parking is available at extra cost. Foakh has published no
+  /// parking price, so no figure is ever quoted alongside it.
+  parkingPurchasableSeparately Boolean @default(false) @map("parking_purchasable_separately")
+
+  /// The penthouse occupies floors 11 and 12.
+  spansFloors Int @default(1) @map("spans_floors")
+
+  /// "11th + 12th Floor" — printed instead of a single floor number.
+  floorSpanLabel String? @map("floor_span_label")
+
+  description String?
+  sortOrder   Int     @default(0) @map("sort_order")
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pricingConfigurations PricingConfiguration[]
+  units                 Unit[]
+
+  @@map("unit_types")
+}
+
+enum FurnishingLevel {
+  UNFURNISHED
+  FURNISHED
+  FURNISHED_SERVICED
+}
+
+/// Classic / Elegant / Sonder. Independent of apartment type, so a new class is
+/// a row plus one pricing row per type — never a schema change.
+model ApartmentClass {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+  name String
+
+  furnishingLevel FurnishingLevel @map("furnishing_level")
+  isServiced      Boolean         @default(false) @map("is_serviced")
+  description     String?
+  sortOrder       Int             @default(0) @map("sort_order")
+  isActive        Boolean         @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pricingConfigurations PricingConfiguration[]
+  units                 Unit[]
+
+  @@map("classes")
+}
+
+/// unit_type × class → price. The matrix, versioned by effective date so a
+/// price rise is a new row and historical bookings stay explicable.
+model PricingConfiguration {
+  id         String @id @default(uuid()) @db.Uuid
+  unitTypeId String @map("unit_type_id") @db.Uuid
+  classId    String @map("class_id") @db.Uuid
+
+  price    Decimal @db.Decimal(14, 2)
+  currency String  @default("PKR")
+
+  /// Derived (price ÷ area) but stored, because it is printed on the client's
+  /// schedule and must stay exactly what was agreed even if the area master
+  /// data is later corrected. Four decimal places: PKR 17,059.8911/sq ft.
+  pricePerSqFt Decimal @map("price_per_sq_ft") @db.Decimal(14, 4)
+
+  effectiveFrom DateTime  @default(now()) @map("effective_from")
+  effectiveTo   DateTime? @map("effective_to")
+
+  /// TRUE for figures supplied ambiguously and not yet ratified by Foakh —
+  /// currently Type D Elegant and Sonder. The booking API refuses to price a
+  /// deal from an unconfirmed row, so an unverified number cannot silently
+  /// become a signed contract.
+  needsConfirmation Boolean   @default(false) @map("needs_confirmation")
+  confirmationNote  String?   @map("confirmation_note")
+  confirmedByUserId String?   @map("confirmed_by_user_id") @db.Uuid
+  confirmedAt       DateTime? @map("confirmed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unitType    UnitType       @relation(fields: [unitTypeId], references: [id], onDelete: Cascade)
+  class       ApartmentClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  confirmedBy User?          @relation(fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  bookings    Booking[]
+
+  @@unique([unitTypeId, classId, effectiveFrom])
+  @@index([needsConfirmation])
+  @@map("pricing_configurations")
+}
+
+enum UnitStatus {
+  AVAILABLE
+  ON_HOLD
+  BOOKED
+  SOLD
+  BLOCKED
+}
+
+/// A physical apartment.
+model Unit {
+  id         String @id @default(uuid()) @db.Uuid
+  unitNumber String @map("unit_number")
+
+  buildingId String @map("building_id") @db.Uuid
+  floorId    String @map("floor_id") @db.Uuid
+  unitTypeId String @map("unit_type_id") @db.Uuid
+  classId    String @map("class_id") @db.Uuid
+
+  status UnitStatus @default(AVAILABLE)
+
+  /// Copied from the unit type at creation so a per-unit exception (a corner
+  /// unit sold with an extra bay) does not require a new type.
+  parkingSpaces Int @default(0) @map("parking_spaces")
+
+  /// Overrides the matrix for this unit only. Normally null.
+  listPriceOverride Decimal? @map("list_price_override") @db.Decimal(14, 2)
+
+  notes String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  building Building       @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  floor    Floor          @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  unitType UnitType       @relation(fields: [unitTypeId], references: [id])
+  class    ApartmentClass @relation(fields: [classId], references: [id])
+  bookings Booking[]
+
+  @@unique([buildingId, unitNumber])
+  @@index([status])
+  @@index([unitTypeId, classId])
+  @@map("units")
+}
+
+// -----------------------------------------------------------------------------
+// PEOPLE
+// -----------------------------------------------------------------------------
+
+enum FilerStatus {
+  UNKNOWN
+  FILER
+  NON_FILER
+}
+
+model Client {
+  id         String @id @default(uuid()) @db.Uuid
+  /// CLI-2026-000001. Immutable once issued.
+  clientCode String @unique @map("client_code")
+
+  fullLegalName       String  @map("full_legal_name")
+  fatherOrHusbandName String? @map("father_or_husband_name")
+
+  /// Stored digits-only (13 chars) so `35202-1234567-1` and `3520212345671`
+  /// are the same person. Formatting is a presentation concern.
+  cnic        String    @unique
+  cnicExpiry  DateTime? @map("cnic_expiry") @db.Date
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+
+  /// E.164. Pakistani local input (03001234567) is normalised on the way in.
+  mobile   String
+  whatsapp String?
+  email    String?
+
+  currentAddress   String? @map("current_address")
+  permanentAddress String? @map("permanent_address")
+  city             String?
+  province         String?
+  nationality      String  @default("Pakistani")
+
+  occupation  String?
+  companyName String?     @map("company_name")
+  ntn         String?
+  filerStatus FilerStatus @default(UNKNOWN) @map("filer_status")
+
+  coApplicantName String? @map("co_applicant_name")
+  coApplicantCnic String? @map("co_applicant_cnic")
+  nomineeName     String? @map("nominee_name")
+  nomineeCnic     String? @map("nominee_cnic")
+
+  /// Lead qualification: the layout the client has expressed interest in.
+  ///
+  /// Optional and purely informational — it never filters inventory and never
+  /// constrains what may be booked. A client who said "Type B" and then buys a
+  /// Type A is an ordinary outcome, so this records the conversation rather
+  /// than governing it.
+  interestedTypeCode String? @map("interested_type_code")
+
+  notes String?
+
+  /// Bumped whenever a booking or note touches the client, so the CRM list can
+  /// be ordered by "who did something recently" rather than by creation date.
+  lastActivityAt DateTime @default(now()) @map("last_activity_at")
+
+  /// The Sales Agent who owns this client. Drives row-level visibility.
+  salesAgentId String? @map("sales_agent_id") @db.Uuid
+
+  /// How the client reached Foakh.
+  leadSource LeadSource @default(DIRECT) @map("lead_source")
+
+  /// The external broker who introduced them, when there was one. Null for a
+  /// direct client — and null is what stops a commission schedule existing.
+  brokerId String? @map("broker_id") @db.Uuid
+
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  salesAgent SalesAgent? @relation(fields: [salesAgentId], references: [id], onDelete: SetNull)
+  broker     Broker?     @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  createdBy  User?       @relation("ClientCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  bookings   Booking[]
+  documents  Document[]
+
+  @@index([salesAgentId])
+  @@index([brokerId])
+  @@index([mobile])
+  @@map("clients")
+}
+
+enum SalesAgentStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// How a client first reached Foakh. Drives whether a broker is involved.
+enum LeadSource {
+  DIRECT
+  BROKER
+  WEBSITE
+  PHONE
+  WHATSAPP
+  REFERRAL
+  OTHER
+}
+
+enum BrokerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// An internal Foakh sales employee.
+///
+/// This is the authenticated person who creates clients, selects inventory and
+/// processes bookings. It is emphatically NOT a broker: earlier versions of
+/// this system conflated the two, which meant the person selling on Foakh's
+/// behalf appeared to be an outside channel partner earning referral
+/// commission. A Sales Agent is staff and is not paid the 4%.
+model SalesAgent {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// SAG-2026-000001. Immutable, and what attributes a booking internally.
+  salesAgentCode String @unique @map("sales_agent_code")
+
+  userId String @unique @map("user_id") @db.Uuid
+
+  mobile String?
+
+  status   SalesAgentStatus @default(ACTIVE)
+  isActive Boolean          @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clients  Client[]
+  bookings Booking[]
+  brokers  Broker[]  @relation("BrokerCreatedByAgent")
+
+  @@index([status, isActive])
+  @@map("sales_agents")
+}
+
+/// An external referral / channel partner.
+///
+/// Does not log in — a Sales Agent records the broker when a client was
+/// introduced by one. Only bookings with a broker attached generate the 4%
+/// commission schedule; a direct sale generates none at all.
+model Broker {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// BRK-2026-000001.
+  brokerCode String @unique @map("broker_code")
+
+  fullName    String  @map("full_name")
+  agencyName  String? @map("agency_name")
+  cnic        String?
+  mobile      String
+  whatsapp    String?
+  email       String?
+  addressLine String? @map("address_line")
+  city        String?
+  ntn         String?
+
+  /// Total commission as a percentage of the sale price. 4.0000 = 4%.
+  commissionRatePct Decimal @default(4.0000) @map("commission_rate_pct") @db.Decimal(7, 4)
+
+  notes String?
+
+  status   BrokerStatus @default(ACTIVE)
+  isActive Boolean      @default(true) @map("is_active")
+
+  /// Which Sales Agent first recorded this broker.
+  createdBySalesAgentId String? @map("created_by_sales_agent_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  createdBySalesAgent SalesAgent? @relation("BrokerCreatedByAgent", fields: [createdBySalesAgentId], references: [id], onDelete: SetNull)
+
+  clients         Client[]
+  bookings        Booking[]
+  commissionPlans CommissionPlan[]
+  milestones      CommissionMilestone[]
+
+  @@index([status, isActive])
+  @@index([mobile])
+  @@map("brokers")
+}
+
+// -----------------------------------------------------------------------------
+// BOOKINGS
+// -----------------------------------------------------------------------------
+
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model Booking {
+  id          String @id @default(uuid()) @db.Uuid
+  /// BKG-2026-000001.
+  bookingCode String @unique @map("booking_code")
+
+  clientId String @map("client_id") @db.Uuid
+
+  /// The internal Foakh employee who processed the sale. Always present.
+  salesAgentId String @map("sales_agent_id") @db.Uuid
+
+  /// The external broker who introduced the client, if any. Null on a direct
+  /// sale, and the commission schedule is generated only when this is set.
+  brokerId String? @map("broker_id") @db.Uuid
+
+  leadSource LeadSource @default(DIRECT) @map("lead_source")
+
+  unitId String @map("unit_id") @db.Uuid
+
+  status      BookingStatus @default(DRAFT)
+  bookingDate DateTime      @map("booking_date") @db.Date
+
+  // --- Pricing snapshot -----------------------------------------------------
+  // Copied at confirmation. Nothing below is ever recomputed from live master
+  // data: a price rise next quarter must not alter a schedule the client has
+  // already signed.
+  pricingConfigurationId String? @map("pricing_configuration_id") @db.Uuid
+
+  snapUnitNumber   String @map("snap_unit_number")
+  snapBuildingName String @map("snap_building_name")
+  snapFloorLevel   Int    @map("snap_floor_level")
+  snapUnitTypeCode String @map("snap_unit_type_code")
+  snapUnitTypeName String @map("snap_unit_type_name")
+  snapClassCode    String @map("snap_class_code")
+  snapClassName    String @map("snap_class_name")
+
+  snapResidenceCategory     ResidenceCategory @default(APARTMENT) @map("snap_residence_category")
+  snapResidenceCategoryName String            @default("Apartment") @map("snap_residence_category_name")
+
+  snapBedrooms          Int     @map("snap_bedrooms")
+  snapBathrooms         Int     @map("snap_bathrooms")
+  snapAttachedBathrooms Int     @default(0) @map("snap_attached_bathrooms")
+  snapHasBalcony        Boolean @map("snap_has_balcony")
+  snapParkingSpaces     Int     @map("snap_parking_spaces")
+
+  snapAreaSqFt     Decimal @map("snap_area_sq_ft") @db.Decimal(10, 2)
+  snapPricePerSqFt Decimal @map("snap_price_per_sq_ft") @db.Decimal(14, 4)
+  snapTotalPrice   Decimal @map("snap_total_price") @db.Decimal(14, 2)
+  currency         String  @default("PKR")
+
+  expectedHandoverDate DateTime? @map("expected_handover_date") @db.Date
+
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason")
+  cancelledByUserId  String?   @map("cancelled_by_user_id") @db.Uuid
+
+  /// Attribution overrides are an admin-only action and must carry a reason.
+  attributionOverrideReason String? @map("attribution_override_reason")
+
+  notes           String?
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  client      Client                @relation(fields: [clientId], references: [id])
+  salesAgent  SalesAgent            @relation(fields: [salesAgentId], references: [id])
+  broker      Broker?               @relation(fields: [brokerId], references: [id], onDelete: SetNull)
+  unit        Unit                  @relation(fields: [unitId], references: [id])
+  pricing     PricingConfiguration? @relation(fields: [pricingConfigurationId], references: [id], onDelete: SetNull)
+  createdBy   User?                 @relation("BookingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  cancelledBy User?                 @relation("BookingCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+
+  paymentPlan    PaymentPlan?
+  installments   Installment[]
+  payments       Payment[]
+  commissionPlan CommissionPlan?
+  invoices       Invoice[]
+  documents      Document[]
+
+  @@index([status, bookingDate])
+  @@index([brokerId, status])
+  @@index([clientId])
+  @@map("bookings")
+}
+
+// -----------------------------------------------------------------------------
+// CLIENT PAYMENT PLAN
+// -----------------------------------------------------------------------------
+
+model PaymentPlan {
+  id        String @id @default(uuid()) @db.Uuid
+  bookingId String @unique @map("booking_id") @db.Uuid
+
+  totalAmount Decimal @map("total_amount") @db.Decimal(14, 2)
+  currency    String  @default("PKR")
+
+  // The configured shape: 10 / 10 / 10 / 60-over-44 / 10.
+  downPaymentPct Decimal @map("down_payment_pct") @db.Decimal(7, 4)
+  secondPct      Decimal @map("second_pct") @db.Decimal(7, 4)
+  thirdPct       Decimal @map("third_pct") @db.Decimal(7, 4)
+  monthlyPoolPct Decimal @map("monthly_pool_pct") @db.Decimal(7, 4)
+  completionPct  Decimal @map("completion_pct") @db.Decimal(7, 4)
+
+  /// The pool is divided by this count. The per-instalment percentage is NOT
+  /// the source of truth — 1.36% × 44 is 99.84%, which would leave the plan
+  /// short. Amounts are derived from `monthlyPoolAmount / monthlyCount`, and
+  /// the residual lands on the final monthly instalment.
+  monthlyCount      Int     @map("monthly_count")
+  monthlyPoolAmount Decimal @map("monthly_pool_amount") @db.Decimal(14, 2)
+  monthlyBaseAmount Decimal @map("monthly_base_amount") @db.Decimal(14, 2)
+
+  monthlyStartDate     DateTime  @map("monthly_start_date") @db.Date
+  expectedHandoverDate DateTime? @map("expected_handover_date") @db.Date
+
+  generatedAt DateTime @default(now()) @map("generated_at")
+
+  booking      Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  installments Installment[]
+
+  @@map("payment_plans")
+}
+
+enum InstallmentKind {
+  DOWN_PAYMENT
+  MILESTONE_60D
+  MILESTONE_120D
+  MONTHLY
+  COMPLETION
+}
+
+enum InstallmentStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+model Installment {
+  id            String @id @default(uuid()) @db.Uuid
+  paymentPlanId String @map("payment_plan_id") @db.Uuid
+  bookingId     String @map("booking_id") @db.Uuid
+
+  sequence Int
+  kind     InstallmentKind
+  label    String
+
+  /// For display only. Financial truth is `amount`.
+  percentageOfTotal Decimal  @map("percentage_of_total") @db.Decimal(9, 6)
+  amount            Decimal  @db.Decimal(14, 2)
+  currency          String   @default("PKR")
+  dueDate           DateTime @map("due_date") @db.Date
+
+  status     InstallmentStatus @default(PENDING)
+  paidAmount Decimal           @default(0) @map("paid_amount") @db.Decimal(14, 2)
+  paidAt     DateTime?         @map("paid_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id], onDelete: Cascade)
+  booking     Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+
+  @@unique([paymentPlanId, sequence])
+  @@index([status, dueDate])
+  @@index([bookingId, sequence])
+  @@map("installments")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+  ONLINE
+  OTHER
+}
+
+enum PaymentStatus {
+  RECORDED
+  CLEARED
+  BOUNCED
+  REVERSED
+}
+
+model Payment {
+  id          String @id @default(uuid()) @db.Uuid
+  /// PAY-2026-000001.
+  paymentCode String @unique @map("payment_code")
+
+  bookingId     String  @map("booking_id") @db.Uuid
+  installmentId String? @map("installment_id") @db.Uuid
+
+  amount   Decimal @db.Decimal(14, 2)
+  currency String  @default("PKR")
+
+  method    PaymentMethod
+  reference String?
+  status    PaymentStatus @default(RECORDED)
+
+  receivedAt       DateTime @map("received_at")
+  recordedByUserId String?  @map("recorded_by_user_id") @db.Uuid
+  notes            String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  booking     Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  installment Installment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+  recordedBy  User?        @relation(fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, status])
+  @@index([receivedAt])
+  @@map("payments")
+}
+
+// -----------------------------------------------------------------------------
+// BROKER COMMISSION
+// -----------------------------------------------------------------------------
+
+model CommissionPlan {
+  id        String @id @default(uuid()) @db.Uuid
+  bookingId String @unique @map("booking_id") @db.Uuid
+  brokerId  String @map("broker_id") @db.Uuid
+
+  /// Frozen at generation. Recomputing from the broker's current rate would
+  /// silently restate commission already agreed on a signed booking.
+  ratePct     Decimal @map("rate_pct") @db.Decimal(7, 4)
+  basisAmount Decimal @map("basis_amount") @db.Decimal(14, 2)
+  totalAmount Decimal @map("total_amount") @db.Decimal(14, 2)
+  currency    String  @default("PKR")
+
+  generatedAt DateTime @default(now()) @map("generated_at")
+
+  booking    Booking               @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  broker     Broker                @relation(fields: [brokerId], references: [id])
+  milestones CommissionMilestone[]
+
+  @@map("commission_plans")
+}
+
+enum CommissionMilestoneStatus {
+  UPCOMING
+  ELIGIBLE
+  APPROVED
+  PAID
+  HELD
+  CANCELLED
+}
+
+/// Four 1% milestones. A milestone becoming due does NOT make it payable —
+/// finance approves, then pays. Automatic payout on a date is how a commission
+/// gets paid on a booking that was cancelled the week before.
+model CommissionMilestone {
+  id               String @id @default(uuid()) @db.Uuid
+  commissionPlanId String @map("commission_plan_id") @db.Uuid
+  brokerId         String @map("broker_id") @db.Uuid
+
+  sequence Int
+  label    String
+
+  percentageOfSale Decimal  @map("percentage_of_sale") @db.Decimal(7, 4)
+  amount           Decimal  @db.Decimal(14, 2)
+  currency         String   @default("PKR")
+  expectedDate     DateTime @map("expected_date") @db.Date
+
+  status CommissionMilestoneStatus @default(UPCOMING)
+
+  approvedByUserId String?   @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime? @map("approved_at")
+  paidAt           DateTime? @map("paid_at")
+  payoutReference  String?   @map("payout_reference")
+  heldReason       String?   @map("held_reason")
+  notes            String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  commissionPlan CommissionPlan @relation(fields: [commissionPlanId], references: [id], onDelete: Cascade)
+  broker         Broker         @relation(fields: [brokerId], references: [id])
+  approvedBy     User?          @relation("MilestoneApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([commissionPlanId, sequence])
+  @@index([status, expectedDate])
+  @@index([brokerId, status])
+  @@map("commission_milestones")
+}
+
+// -----------------------------------------------------------------------------
+// INVOICES AND DOCUMENTS
+// -----------------------------------------------------------------------------
+
+model Invoice {
+  id          String @id @default(uuid()) @db.Uuid
+  /// INV-2026-000001. One invoice per booking; the client and broker PDFs are
+  /// two renderings of it, not two invoices.
+  invoiceCode String @unique @map("invoice_code")
+
+  bookingId String   @map("booking_id") @db.Uuid
+  issuedAt  DateTime @default(now()) @map("issued_at")
+
+  generatedByUserId String? @map("generated_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  generatedBy User?   @relation(fields: [generatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@map("invoices")
+}
+
+enum DocumentKind {
+  CNIC_FRONT
+  CNIC_BACK
+  CLIENT_PHOTO
+  BOOKING_FORM
+  PAYMENT_RECEIPT
+  OTHER
+}
+
+model Document {
+  id   String       @id @default(uuid()) @db.Uuid
+  kind DocumentKind
+
+  clientId  String? @map("client_id") @db.Uuid
+  bookingId String? @map("booking_id") @db.Uuid
+
+  fileName    String @map("file_name")
+  mimeType    String @map("mime_type")
+  byteSize    Int    @map("byte_size")
+  /// Path within the configured upload root. Files are stored outside the
+  /// database and served through an authorised endpoint, never a public URL —
+  /// a CNIC scan on a guessable path is a data breach.
+  storagePath String @map("storage_path")
+
+  uploadedByUserId String?  @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  client     Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  booking    Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([bookingId])
+  @@map("documents")
+}
+
+// -----------------------------------------------------------------------------
+// AUDIT AND SETTINGS
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id          String  @id @default(uuid()) @db.Uuid
+  action      String
+  entityType  String  @map("entity_type")
+  entityId    String? @map("entity_id")
+  actorUserId String? @map("actor_user_id") @db.Uuid
+
+  /// Snapshots are redacted before storage — an audit log answers "who changed
+  /// what, when", and does not need a second copy of the client's CNIC under
+  /// different access controls.
+  before Json?
+  after  Json?
+
+  reason    String?
+  ipAddress String?  @map("ip_address")
+  requestId String?  @map("request_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}

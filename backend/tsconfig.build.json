@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The root tsconfig also covers prisma/, test/ and scripts/ so the editor
+    // and `pnpm typecheck` see everything. Including them in a build would make
+    // src/ a subdirectory of the inferred rootDir and emit dist/src/main.js.
+    "rootDir": "./src",
+    "outDir": "./dist",
+    // Kept inside outDir on purpose. Nest's `deleteOutDir` removes dist but
+    // would leave a build-info file next to tsconfig, and incremental tsc would
+    // then decide everything was up to date and emit nothing — a silent
+    // zero-output build.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test", "prisma", "scripts", "**/*.spec.ts"]
+}

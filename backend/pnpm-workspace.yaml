@@ -1,0 +1,15 @@
+# Build scripts are opt-in under pnpm. Prisma needs its postinstall to fetch
+# query/migration engines; unrs-resolver and msgpackr-extract are native
+# helpers for eslint and bullmq. Scarf is telemetry only — kept off.
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@scarf/scarf': false
+  msgpackr-extract: true
+  prisma: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@nestjs/common@11.2.1'
+  - '@nestjs/core@11.2.1'
+  - '@nestjs/platform-express@11.2.1'
+  - '@nestjs/testing@11.2.1'

@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# env — never commit populated env files, only the .example templates
+.env
+.env.*
+!.env.example
+
+# test / coverage
+coverage/
+.jest-cache/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# generated artefacts
+backend/openapi.json
+frontend/src/lib/api/generated/
+
+# editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store

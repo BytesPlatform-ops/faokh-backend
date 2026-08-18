@@ -1,0 +1,40 @@
+{
+  "name": "foakh-booking-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Foakh Wind Corridor Enclave \u2014 consultation booking journey and sales CRM",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "api:types": "openapi-typescript ../backend/openapi.json -o src/lib/api/generated/schema.d.ts",
+    "build": "next build",
+    "build:mock": "NEXT_PUBLIC_DATA_MODE=mock NEXT_PUBLIC_ALLOW_MOCK_BUILD=1 next build",
+    "dev": "next dev",
+    "lint": "eslint .",
+    "start": "next start",
+    "start:mock": "NEXT_PUBLIC_DATA_MODE=mock next start",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "next": "16.2.12",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.12",
+    "openapi-typescript": "^7.9.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,5 @@
+# `sharp` powers Next.js image optimisation in production; `unrs-resolver` is
+# eslint's native resolver. Both need their install scripts to fetch binaries.
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
