@@ -2,6 +2,8 @@
 # query/migration engines; unrs-resolver and msgpackr-extract are native
 # helpers for eslint and bullmq. Scarf is telemetry only — kept off.
 allowBuilds:
+  # tsx runs the seed and provisioning scripts; it needs esbuild's binary.
+  esbuild: true
   '@prisma/client': true
   '@prisma/engines': true
   '@scarf/scarf': false
