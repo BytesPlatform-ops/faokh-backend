@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 
 import { SIGNED_OUT_KEY } from '@/app/login/page';
 import { signOut } from '@/lib/supabase';
-import { DATA_MODE, type SessionUser, sessionService } from '@/services/crm';
+import { ApiError, DATA_MODE, type SessionUser, sessionService } from '@/services/crm';
 
 /**
  * The CRM shell.
@@ -40,6 +40,7 @@ export function CrmShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [blocked, setBlocked] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,12 +50,27 @@ export function CrmShell({ children }: { children: React.ReactNode }) {
       .then((value) => {
         if (!cancelled) setUser(value);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (cancelled) return;
-        // No usable session. Send the user to sign in, remembering where they
-        // were headed so they land there rather than on a generic dashboard.
+
+        // Only an expired or absent session is worth a trip to the sign-in
+        // page. Everything else — a CRM profile that was never provisioned, a
+        // deactivated account, an API that is down — survives signing in
+        // again, so redirecting produces a loop: land on the dashboard, fail,
+        // bounce back, sign in, land, fail. The person sees a flicker and no
+        // explanation, and the one thing they need is the reason.
+        //
         // Mock mode never reaches here — it has no network call to fail.
-        router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+        if (error instanceof ApiError && error.status === 401) {
+          router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+          return;
+        }
+
+        setBlocked(
+          error instanceof ApiError
+            ? error.message
+            : 'Could not reach the Foakh API. Check your connection and try again.',
+        );
       });
 
     return () => {
@@ -77,6 +93,40 @@ export function CrmShell({ children }: { children: React.ReactNode }) {
   }
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+  // A signed-in person the CRM will not admit. The navigation is useless to
+  // them — every screen behind it makes the same call that just failed — so
+  // this replaces the shell rather than sitting inside it, and offers the one
+  // action that helps: sign out and try a different account.
+  if (blocked !== null) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-[var(--foakh-cream-soft)] px-5 py-12">
+        <div className="w-full max-w-md rounded-2xl border border-[var(--foakh-border)] bg-white p-6 text-center shadow-sm">
+          <Image
+            src="/brand/foakh-mark.png"
+            alt=""
+            width={36}
+            height={36}
+            className="mx-auto h-9 w-9 object-contain"
+          />
+          <h1 className="font-display mt-3 text-lg font-medium text-[var(--foakh-ink)]">
+            You are signed in, but not into the CRM
+          </h1>
+          <p className="mt-2 text-sm text-[var(--foakh-text)]">{blocked}</p>
+          <p className="mt-3 text-xs text-[var(--foakh-muted)]">
+            Sign-in proves who you are; access is granted separately by an administrator.
+          </p>
+          <button
+            type="button"
+            onClick={() => void endSession()}
+            className="mt-5 rounded-lg bg-[var(--foakh-terracotta)] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--foakh-terracotta-deep)]"
+          >
+            Sign out
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-dvh bg-[var(--foakh-cream-soft)]">

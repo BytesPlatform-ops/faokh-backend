@@ -70,6 +70,25 @@ export async function simulateLatency(ms = 220): Promise<void> {
 }
 
 /**
+ * An API call that came back with a status.
+ *
+ * The status matters to callers, not just the message: 401 means "sign in
+ * again", while 403 means "you are signed in and this account still may not
+ * enter" — an administrator has to act, and bouncing such a person to the
+ * sign-in page loops them forever without ever saying why. A bare `Error`
+ * cannot express that difference.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/**
  * Thin fetch wrapper for `api` mode.
  *
  * Authentication travels as a Supabase bearer token rather than a cookie, so
@@ -98,9 +117,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     // 401 is worth naming explicitly: the UI can send the user back to sign-in
     // rather than showing "Request failed" on every panel at once.
     if (response.status === 401) {
-      throw new Error('Your session has expired. Please sign in again.');
+      throw new ApiError('Your session has expired. Please sign in again.', 401);
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return (await response.json()) as T;
